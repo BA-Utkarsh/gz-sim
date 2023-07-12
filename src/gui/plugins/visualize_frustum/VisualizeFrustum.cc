@@ -112,8 +112,8 @@ inline namespace GZ_SIM_VERSION_NAMESPACE
     public: bool frustumEntityDirty{true};
   };
 }
-}
-}
+}  // namespace sim
+}  // namespace gz
 
 using namespace gz;
 using namespace sim;
@@ -214,7 +214,7 @@ bool VisualizeFrustum::eventFilter(QObject *_obj, QEvent *_event)
     // rendering calls here
 
     std::lock_guard<std::mutex> lock(this->dataPtr->serviceMutex);
-    if (!this->dataPtr->initialized)	   
+    if (!this->dataPtr->initialized)
     {
       this->LoadFrustum();
     }

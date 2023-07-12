@@ -100,6 +100,6 @@ inline namespace GZ_SIM_VERSION_NAMESPACE
     private: std::unique_ptr<VisualizeFrustumPrivate> dataPtr;
   };
 }
-}
-}
+}  // namespace sim
+}  // namespace gz
 #endif
