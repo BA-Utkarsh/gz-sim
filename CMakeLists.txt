@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.10.2 FATAL_ERROR)
 #============================================================================
 # Initialize the project
 #============================================================================
-project(gz-sim7 VERSION 7.5.0)
+project(gz-sim7 VERSION 7.8.0)
 set (GZ_DISTRIBUTION "Garden")
 
 #============================================================================
@@ -38,12 +38,19 @@ else()
   set (EXTRA_TEST_LIB_DEPS)
 endif()
 
-include(test/find_dri.cmake)
-FindDRI()
+# We're disabling pybind11 by default on Windows because they
+# don't have active CI on them for now.
+set(skip_pybind11_default_value OFF)
+if (MSVC)
+  set(skip_pybind11_default_value ON)
+endif()
 
 option(SKIP_PYBIND11
       "Skip generating Python bindings via pybind11"
-      OFF)
+      ${skip_pybind11_default_value})
+
+include(test/find_dri.cmake)
+FindDRI()
 
 include(CMakeDependentOption)
 cmake_dependent_option(USE_SYSTEM_PATHS_FOR_PYTHON_INSTALLATION
@@ -59,7 +66,7 @@ cmake_dependent_option(USE_DIST_PACKAGES_FOR_PYTHON
 #============================================================================
 
 # Setting this policy enables using the protobuf_MODULE_COMPATIBLE
-# set command in CMake versions older than 13.13
+# set command when cmake_minimum_required is less than 3.13
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 # This option is needed to use the PROTOBUF_GENERATE_CPP
 # in case protobuf is found with the CMake config files
@@ -236,7 +243,7 @@ add_subdirectory(examples)
 #============================================================================
 gz_create_packages()
 
-if (${pybind11_FOUND})
+if (pybind11_FOUND)
 	add_subdirectory(python)
 endif()
 #============================================================================

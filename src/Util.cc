@@ -18,7 +18,10 @@
 #include <gz/msgs/entity.pb.h>
 
 #include <gz/common/Filesystem.hh>
+#include <gz/common/Mesh.hh>
+#include <gz/common/MeshManager.hh>
 #include <gz/common/StringUtils.hh>
+#include <gz/common/URI.hh>
 #include <gz/common/Util.hh>
 #include <gz/math/Helpers.hh>
 #include <gz/math/Pose3.hh>
@@ -49,6 +52,7 @@
 #include "gz/sim/components/World.hh"
 #include "gz/sim/components/LinearVelocity.hh"
 
+#include "gz/sim/InstallationDirectories.hh"
 #include "gz/sim/Util.hh"
 
 namespace gz
@@ -431,26 +435,42 @@ std::string asFullPath(const std::string &_uri, const std::string &_filePath)
   return common::joinPaths(path,  uri);
 }
 
+namespace
+{
+//////////////////////////////////////////////////
+/// \brief Helper function to extract paths form an environment variable
+/// refactored from `resourcePaths` below.
+/// common::SystemPaths::PathsFromEnv is available, but it's behavior is
+/// slightly different from this in that it adds trailing `/` to the end of a
+/// path if it doesn't have it already.
+std::vector<std::string> extractPathsFromEnv(const std::string &_envVar)
+{
+  std::vector<std::string> pathsFromEnv;
+  char *pathFromEnvCStr = std::getenv(_envVar.c_str());
+  if (pathFromEnvCStr && *pathFromEnvCStr != '\0')
+  {
+    pathsFromEnv =
+        common::Split(pathFromEnvCStr, common::SystemPaths::Delimiter());
+  }
+  return pathsFromEnv;
+}
+}  // namespace
+
 //////////////////////////////////////////////////
 std::vector<std::string> resourcePaths()
 {
-  std::vector<std::string> gzPaths;
-  char *gzPathCStr = std::getenv(kResourcePathEnv.c_str());
-  if (gzPathCStr && *gzPathCStr != '\0')
-  {
-    gzPaths = common::Split(gzPathCStr, common::SystemPaths::Delimiter());
-  }
+  auto gzPaths = extractPathsFromEnv(kResourcePathEnv);
   // TODO(CH3): Deprecated. Remove on tock.
-  else
+  if (gzPaths.empty())
   {
-    gzPathCStr = std::getenv(kResourcePathEnvDeprecated.c_str());
+    char *gzPathCStr = std::getenv(kResourcePathEnvDeprecated.c_str());
     if (gzPathCStr && *gzPathCStr != '\0')
     {
       gzwarn << "Using deprecated environment variable ["
              << kResourcePathEnvDeprecated
              << "] to find resources. Please use ["
              << kResourcePathEnv <<" instead." << std::endl;
-      gzPaths = common::Split(gzPathCStr, ':');
+      gzPaths = extractPathsFromEnv(kResourcePathEnvDeprecated);
     }
   }
 
@@ -485,49 +505,41 @@ void addResourcePaths(const std::vector<std::string> &_paths)
   }
 
   // Gazebo resource paths
-  std::vector<std::string> gzPaths;
-  char *gzPathCStr = std::getenv(kResourcePathEnv.c_str());
-  if (gzPathCStr && *gzPathCStr != '\0')
-  {
-    gzPaths = common::Split(gzPathCStr, common::SystemPaths::Delimiter());
-  }
+  auto gzPaths = extractPathsFromEnv(kResourcePathEnv);
   // TODO(CH3): Deprecated. Remove on tock.
-  else
+  if (gzPaths.empty())
   {
-    gzPathCStr = std::getenv(kResourcePathEnvDeprecated.c_str());
+    char *gzPathCStr = std::getenv(kResourcePathEnvDeprecated.c_str());
     if (gzPathCStr && *gzPathCStr != '\0')
     {
       gzwarn << "Using deprecated environment variable ["
              << kResourcePathEnvDeprecated
              << "] to find resources. Please use ["
              << kResourcePathEnv <<" instead." << std::endl;
-      gzPaths = common::Split(gzPathCStr, ':');
+      gzPaths = extractPathsFromEnv(kResourcePathEnvDeprecated);
     }
   }
+
+  auto addUniquePaths = [](std::vector<std::string> &_container,
+                           const std::vector<std::string> _pathsToAdd)
+  {
+    for (const auto &path : _pathsToAdd)
+    {
+      if (std::find(_container.begin(), _container.end(), path) ==
+          _container.end())
+      {
+        _container.push_back(path);
+      }
+    }
+  };
 
   // Add new paths to gzPaths
-  for (const auto &path : _paths)
-  {
-    if (std::find(gzPaths.begin(), gzPaths.end(), path) == gzPaths.end())
-    {
-      gzPaths.push_back(path);
-    }
-  }
-
+  addUniquePaths(gzPaths, _paths);
   // Append Gz paths to SDF / Ign paths
-  for (const auto &path : gzPaths)
-  {
-    if (std::find(sdfPaths.begin(), sdfPaths.end(), path) == sdfPaths.end())
-    {
-      sdfPaths.push_back(path);
-    }
+  addUniquePaths(sdfPaths, gzPaths);
+  addUniquePaths(commonPaths, gzPaths);
 
-    if (std::find(commonPaths.begin(),
-        commonPaths.end(), path) == commonPaths.end())
-    {
-      commonPaths.push_back(path);
-    }
-  }
+
 
   // Update the vars
   std::string sdfPathsStr;
@@ -829,12 +841,50 @@ std::string resolveSdfWorldFile(const std::string &_sdfFile,
     systemPaths.SetFilePathEnv(kResourcePathEnv);
 
     // Worlds installed with gz-sim
-    systemPaths.AddFilePaths(GZ_SIM_WORLD_INSTALL_DIR);
+    systemPaths.AddFilePaths(gz::sim::getWorldInstallDir());
 
     filePath = systemPaths.FindFile(_sdfFile);
   }
 
   return filePath;
+}
+
+const common::Mesh *loadMesh(const sdf::Mesh &_meshSdf)
+{
+  const common::Mesh *mesh = nullptr;
+  auto &meshManager = *common::MeshManager::Instance();
+  if (common::URI(_meshSdf.Uri()).Scheme() == "name")
+  {
+    // if it has a name:// scheme, see if the mesh
+    // exists in the mesh manager and load it by name
+    const std::string basename = common::basename(_meshSdf.Uri());
+    mesh = meshManager.MeshByName(basename);
+    if (nullptr == mesh)
+    {
+      gzwarn << "Failed to load mesh by name [" << basename
+             << "]." << std::endl;
+      return nullptr;
+    }
+  }
+  else if (meshManager.IsValidFilename(_meshSdf.Uri()))
+  {
+    // load mesh by file path
+    auto fullPath = asFullPath(_meshSdf.Uri(), _meshSdf.FilePath());
+    mesh = meshManager.Load(fullPath);
+    if (nullptr == mesh)
+    {
+      gzwarn << "Failed to load mesh from [" << fullPath
+             << "]." << std::endl;
+      return nullptr;
+    }
+  }
+  else
+  {
+    gzwarn << "Failed to load mesh [" << _meshSdf.Uri()
+           << "]." << std::endl;
+    return nullptr;
+  }
+  return mesh;
 }
 }
 }

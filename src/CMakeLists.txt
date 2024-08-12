@@ -46,6 +46,11 @@ set(cli_sources
   cmd/ModelCommandAPI.cc
 )
 
+set(material_sources
+  rendering/MaterialParser/MaterialParser.cc
+  rendering/MaterialParser/ConfigLoader.cc
+)
+
 set (sources
   Actor.cc
   Barrier.cc
@@ -54,6 +59,7 @@ set (sources
   ComponentFactory.cc
   EntityComponentManager.cc
   EntityComponentManagerDiff.cc
+  InstallationDirectories.cc
   Joint.cc
   LevelManager.cc
   Light.cc
@@ -77,6 +83,7 @@ set (sources
   ${network_sources}
   ${comms_sources}
   ${component_sources}
+  ${material_sources}
 )
 
 set (gtest_sources
@@ -159,15 +166,36 @@ gz_add_component(gz
     ${cli_sources}
   GET_TARGET_NAME gz_lib_target)
 target_link_libraries(${gz_lib_target}
-  PRIVATE
+  PUBLIC
     ${PROJECT_LIBRARY_TARGET_NAME}
     gz-common${GZ_COMMON_VER}::gz-common${GZ_COMMON_VER}
     gz-sim${PROJECT_VERSION_MAJOR}
     gz-sim${PROJECT_VERSION_MAJOR}-gui
 )
 
+# Executable target that runs the GUI without ruby for debugging purposes.
+add_executable(runGui cmd/runGui_main.cc)
+target_link_libraries(runGui PRIVATE ${gz_lib_target})
+
 # Create the library target
 gz_create_core_library(SOURCES ${sources} CXX_STANDARD 17)
+gz_add_get_install_prefix_impl(GET_INSTALL_PREFIX_FUNCTION gz::sim::getInstallPrefix
+                               GET_INSTALL_PREFIX_HEADER gz/sim/InstallationDirectories.hh
+                               OVERRIDE_INSTALL_PREFIX_ENV_VARIABLE GZ_SIM_INSTALL_PREFIX)
+
+set_property(
+  SOURCE InstallationDirectories.cc
+  PROPERTY COMPILE_DEFINITIONS
+  GZ_SIM_GUI_CONFIG_RELATIVE_PATH="${GZ_DATA_INSTALL_DIR}/gui"
+  GZ_SIM_SYSTEM_CONFIG_RELATIVE_PATH="${GZ_DATA_INSTALL_DIR}/systems"
+  GZ_SIM_SERVER_CONFIG_RELATIVE_PATH="${GZ_DATA_INSTALL_DIR}"
+  GZ_SIM_PLUGIN_RELATIVE_INSTALL_DIR="${GZ_LIB_INSTALL_DIR}/gz-${GZ_DESIGNATION}-${PROJECT_VERSION_MAJOR}/plugins"
+  GZ_SIM_GUI_PLUGIN_RELATIVE_INSTALL_DIR="${GZ_LIB_INSTALL_DIR}/gz-${GZ_DESIGNATION}-${PROJECT_VERSION_MAJOR}/plugins/gui"
+  GZ_SIM_WORLD_RELATIVE_INSTALL_DIR="${GZ_DATA_INSTALL_DIR}/worlds"
+  GZ_SIM_MEDIA_RELATIVE_INSTALL_DIR="${GZ_DATA_INSTALL_DIR}/media"
+)
+install(FILES "rendering/MaterialParser/gazebo.material" DESTINATION ${GZ_DATA_INSTALL_DIR}/media)
+
 target_link_libraries(${PROJECT_LIBRARY_TARGET_NAME}
   PUBLIC
   gz-math${GZ_MATH_VER}
@@ -213,6 +241,8 @@ gz_build_tests(TYPE UNIT
     ${PROJECT_LIBRARY_TARGET_NAME}
     ${EXTRA_TEST_LIB_DEPS}
     gz-sim${PROJECT_VERSION_MAJOR}
+  ENVIRONMENT
+    GZ_SIM_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
 )
 
 # Some server unit tests require rendering.
@@ -266,7 +296,7 @@ foreach(CMD_TEST
   # to the PATH. This is done via the ENVIRONMENT_MODIFICATION that is only available
   # since CMake 3.22. However, if an older CMake is used another trick to install the libraries
   # beforehand
-  if (WIN32 AND CMAKE_VERSION STRGREATER "3.22")
+  if (WIN32 AND ${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.22")
     set_tests_properties(${CMD_TEST} PROPERTIES
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
   endif()

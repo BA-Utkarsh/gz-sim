@@ -57,11 +57,14 @@
 #include "gz/sim/components/JointAxis.hh"
 #include "gz/sim/components/JointType.hh"
 #include "gz/sim/components/LaserRetro.hh"
+#include "gz/sim/components/Level.hh"
+#include "gz/sim/components/LevelEntityNames.hh"
 #include "gz/sim/components/Lidar.hh"
 #include "gz/sim/components/Light.hh"
 #include "gz/sim/components/LightType.hh"
 #include "gz/sim/components/LinearAcceleration.hh"
 #include "gz/sim/components/LinearVelocity.hh"
+#include "gz/sim/components/LinearVelocitySeed.hh"
 #include "gz/sim/components/Link.hh"
 #include "gz/sim/components/LogicalCamera.hh"
 #include "gz/sim/components/MagneticField.hh"
@@ -73,7 +76,9 @@
 #include "gz/sim/components/ParentEntity.hh"
 #include "gz/sim/components/ParentLinkName.hh"
 #include <gz/sim/components/ParticleEmitter.hh>
+#include "gz/sim/components/Performer.hh"
 #include "gz/sim/components/Physics.hh"
+#include "gz/sim/components/PhysicsEnginePlugin.hh"
 #include "gz/sim/components/Pose.hh"
 #include <gz/sim/components/Projector.hh>
 #include "gz/sim/components/RgbdCamera.hh"
@@ -91,9 +96,12 @@
 #include "gz/sim/components/Visibility.hh"
 #include "gz/sim/components/Visual.hh"
 #include "gz/sim/components/WideAngleCamera.hh"
+#include "gz/sim/components/Wind.hh"
 #include "gz/sim/components/WindMode.hh"
 #include "gz/sim/components/World.hh"
 #endif
+
+#include "rendering/MaterialParser/MaterialParser.hh"
 
 class gz::sim::SdfEntityCreatorPrivate
 {
@@ -114,6 +122,9 @@ class gz::sim::SdfEntityCreatorPrivate
   /// \brief Keep track of new visuals being added, so we load their plugins
   /// only after we have their scoped name.
   public: std::map<Entity, sdf::Plugins> newVisuals;
+
+  /// \brief Parse Gazebo defined materials for visuals
+  public: MaterialParser materialParser;
 };
 
 using namespace gz;
@@ -204,6 +215,7 @@ SdfEntityCreator::SdfEntityCreator(EntityComponentManager &_ecm,
 {
   this->dataPtr->ecm = &_ecm;
   this->dataPtr->eventManager = &_eventManager;
+  this->dataPtr->materialParser.Load();
 }
 
 /////////////////////////////////////////////////
@@ -233,34 +245,86 @@ SdfEntityCreator &SdfEntityCreator::operator=(SdfEntityCreator &&_creator)
 //////////////////////////////////////////////////
 Entity SdfEntityCreator::CreateEntities(const sdf::World *_world)
 {
-  GZ_PROFILE("SdfEntityCreator::CreateEntities(sdf::World)");
 
   // World entity
   Entity worldEntity = this->dataPtr->ecm->CreateEntity();
 
-  // World components
-  this->dataPtr->ecm->CreateComponent(worldEntity, components::World());
-  this->dataPtr->ecm->CreateComponent(worldEntity,
+  this->CreateEntities(_world, worldEntity);
+  return worldEntity;
+}
+
+//////////////////////////////////////////////////
+void SdfEntityCreator::CreateEntities(const sdf::World *_world,
+    Entity _worldEntity)
+{
+  GZ_PROFILE("SdfEntityCreator::CreateEntities(sdf::World)");
+
+  if (!this->dataPtr->ecm->EntityHasComponentType(
+        _worldEntity, components::World::typeId))
+  {
+    this->dataPtr->ecm->CreateComponent(_worldEntity, components::World());
+  }
+
+  this->dataPtr->ecm->CreateComponent(_worldEntity,
       components::Name(_world->Name()));
+
+  // Gravity
+  this->dataPtr->ecm->CreateComponent(_worldEntity,
+      components::Gravity(_world->Gravity()));
+
+  // MagneticField
+  this->dataPtr->ecm->CreateComponent(_worldEntity,
+      components::MagneticField(_world->MagneticField()));
+
+  // Create Wind
+  auto windEntity = this->dataPtr->ecm->CreateEntity();
+  this->SetParent(windEntity, _worldEntity);
+  this->dataPtr->ecm->CreateComponent(windEntity, components::Wind());
+  this->dataPtr->ecm->CreateComponent(windEntity,
+      components::WorldLinearVelocity(_world->WindLinearVelocity()));
+  // Initially the wind linear velocity is used as the seed velocity
+  this->dataPtr->ecm->CreateComponent(windEntity,
+      components::WorldLinearVelocitySeed(_world->WindLinearVelocity()));
+
+  // Set the parent of each level to the world
+  this->dataPtr->ecm->Each<components::Level>([&](
+        const Entity &_entity,
+        const components::Level *) -> bool
+  {
+    this->SetParent(_entity, _worldEntity);
+    return true;
+  });
+
+  // Get the entities that should be loaded based on level information.
+  std::set<std::string> levelEntityNames;
+  this->dataPtr->ecm->Each<components::DefaultLevel,
+    components::LevelEntityNames> ([&](
+          const Entity &,
+          const components::DefaultLevel *,
+          const components::LevelEntityNames *_names) -> bool
+  {
+    levelEntityNames = _names->Data();
+    return true;
+  });
 
   // scene
   if (_world->Scene())
   {
-    this->dataPtr->ecm->CreateComponent(worldEntity,
+    this->dataPtr->ecm->CreateComponent(_worldEntity,
         components::Scene(*_world->Scene()));
   }
 
   // atmosphere
   if (_world->Atmosphere())
   {
-    this->dataPtr->ecm->CreateComponent(worldEntity,
+    this->dataPtr->ecm->CreateComponent(_worldEntity,
         components::Atmosphere(*_world->Atmosphere()));
   }
 
   // spherical coordinates
   if (_world->SphericalCoordinates())
   {
-    this->dataPtr->ecm->CreateComponent(worldEntity,
+    this->dataPtr->ecm->CreateComponent(_worldEntity,
         components::SphericalCoordinates(*_world->SphericalCoordinates()));
   }
 
@@ -268,35 +332,84 @@ Entity SdfEntityCreator::CreateEntities(const sdf::World *_world)
   for (uint64_t modelIndex = 0; modelIndex < _world->ModelCount();
       ++modelIndex)
   {
-    auto model = _world->ModelByIndex(modelIndex);
-    auto modelEntity = this->CreateEntities(model);
+    const sdf::Model *model = _world->ModelByIndex(modelIndex);
+    if (levelEntityNames.empty() ||
+        levelEntityNames.find(model->Name()) != levelEntityNames.end())
 
-    this->SetParent(modelEntity, worldEntity);
+    {
+      Entity modelEntity = this->CreateEntities(model, false);
+
+      this->SetParent(modelEntity, _worldEntity);
+    }
   }
 
   // Actors
   for (uint64_t actorIndex = 0; actorIndex < _world->ActorCount();
       ++actorIndex)
   {
-    auto actor = _world->ActorByIndex(actorIndex);
-    auto actorEntity = this->CreateEntities(actor);
-
-    this->SetParent(actorEntity, worldEntity);
+    const sdf::Actor *actor = _world->ActorByIndex(actorIndex);
+    if (levelEntityNames.empty() ||
+        levelEntityNames.find(actor->Name()) != levelEntityNames.end())
+    {
+      Entity actorEntity = this->CreateEntities(actor);
+      this->SetParent(actorEntity, _worldEntity);
+    }
   }
 
   // Lights
   for (uint64_t lightIndex = 0; lightIndex < _world->LightCount();
       ++lightIndex)
   {
-    auto light = _world->LightByIndex(lightIndex);
-    auto lightEntity = this->CreateEntities(light);
+    const sdf::Light *light = _world->LightByIndex(lightIndex);
+    if (levelEntityNames.empty() ||
+        levelEntityNames.find(light->Name()) != levelEntityNames.end())
+    {
+      Entity lightEntity = this->CreateEntities(light);
 
-    this->SetParent(lightEntity, worldEntity);
+      this->SetParent(lightEntity, _worldEntity);
+    }
   }
 
-  // Gravity
-  this->dataPtr->ecm->CreateComponent(worldEntity,
-      components::Gravity(_world->Gravity()));
+  // Attach performers to their parent entity
+  this->dataPtr->ecm->Each<
+    components::Performer,
+    components::PerformerRef>([&](
+          const Entity &_entity,
+          const components::Performer *,
+          const components::PerformerRef *_ref) -> bool
+  {
+    std::optional<Entity> parentEntity =
+      this->dataPtr->ecm->EntityByName(_ref->Data());
+    if (!parentEntity)
+    {
+      // Performers have not been created yet. Try to create the model
+      // or actor and attach the peformer.
+      if (_world->ModelNameExists(_ref->Data()))
+      {
+        const sdf::Model *model = _world->ModelByName(_ref->Data());
+        Entity modelEntity = this->CreateEntities(model, false);
+        this->SetParent(modelEntity, _worldEntity);
+        this->SetParent(_entity, modelEntity);
+      }
+      else if (_world->ActorNameExists(_ref->Data()))
+      {
+        const sdf::Actor *actor = _world->ActorByName(_ref->Data());
+        Entity actorEntity = this->CreateEntities(actor);
+        this->SetParent(actorEntity, _worldEntity);
+        this->SetParent(_entity, actorEntity);
+      }
+      else
+      {
+        gzerr << "Unable to find performer parent entity with name[" <<
+          _ref->Data() << "]. This performer will not adhere to levels.\n";
+      }
+    }
+    else
+    {
+      this->SetParent(_entity, *parentEntity);
+    }
+    return true;
+  });
 
   // Physics
   // \todo(anyone) Support picking a specific physics profile
@@ -305,7 +418,7 @@ Entity SdfEntityCreator::CreateEntities(const sdf::World *_world)
   {
     physics = _world->PhysicsDefault();
   }
-  this->dataPtr->ecm->CreateComponent(worldEntity,
+  this->dataPtr->ecm->CreateComponent(_worldEntity,
       components::Physics(*physics));
 
   // Populate physics options that aren't accessible outside the Element()
@@ -319,7 +432,7 @@ Entity SdfEntityCreator::CreateEntities(const sdf::World *_world)
       auto collisionDetector =
           dartElem->Get<std::string>("collision_detector");
 
-      this->dataPtr->ecm->CreateComponent(worldEntity,
+      this->dataPtr->ecm->CreateComponent(_worldEntity,
           components::PhysicsCollisionDetector(collisionDetector));
     }
     if (dartElem->HasElement("solver") &&
@@ -328,30 +441,26 @@ Entity SdfEntityCreator::CreateEntities(const sdf::World *_world)
       auto solver =
           dartElem->GetElement("solver")->Get<std::string>("solver_type");
 
-      this->dataPtr->ecm->CreateComponent(worldEntity,
+      this->dataPtr->ecm->CreateComponent(_worldEntity,
           components::PhysicsSolver(solver));
     }
   }
 
-  // MagneticField
-  this->dataPtr->ecm->CreateComponent(worldEntity,
-      components::MagneticField(_world->MagneticField()));
-
-  this->dataPtr->eventManager->Emit<events::LoadSdfPlugins>(worldEntity,
-      _world->Plugins());
-  for (const sdf::Plugin &p : _world->Plugins())
-  {
-    GZ_UTILS_WARN_IGNORE__DEPRECATED_DECLARATION
-    this->dataPtr->eventManager->Emit<events::LoadPlugins>(worldEntity,
-        p.ToElement());
-    GZ_UTILS_WARN_RESUME__DEPRECATED_DECLARATION
-  }
-
   // Store the world's SDF DOM to be used when saving the world to file
   this->dataPtr->ecm->CreateComponent(
-      worldEntity, components::WorldSdf(*_world));
+      _worldEntity, components::WorldSdf(*_world));
 
-  return worldEntity;
+  // Load world plugins first.
+  this->dataPtr->eventManager->Emit<events::LoadSdfPlugins>(_worldEntity,
+      _world->Plugins());
+
+  GZ_UTILS_WARN_IGNORE__DEPRECATED_DECLARATION
+  this->dataPtr->eventManager->Emit<events::LoadPlugins>(_worldEntity,
+        _world->ToElement());
+  GZ_UTILS_WARN_RESUME__DEPRECATED_DECLARATION
+
+  // Load model plugins after the world plugin.
+  this->LoadModelPlugins();
 }
 
 //////////////////////////////////////////////////
@@ -362,6 +471,14 @@ Entity SdfEntityCreator::CreateEntities(const sdf::Model *_model)
   auto ent = this->CreateEntities(_model, false);
 
   // Load all model plugins afterwards, so we get scoped name for nested models.
+  this->LoadModelPlugins();
+
+  return ent;
+}
+
+//////////////////////////////////////////////////
+void SdfEntityCreator::LoadModelPlugins()
+{
   for (const auto &[entity, plugins] : this->dataPtr->newModels)
   {
     this->dataPtr->eventManager->Emit<events::LoadSdfPlugins>(entity, plugins);
@@ -402,8 +519,6 @@ Entity SdfEntityCreator::CreateEntities(const sdf::Model *_model)
     }
   }
   this->dataPtr->newVisuals.clear();
-
-  return ent;
 }
 
 //////////////////////////////////////////////////
@@ -610,6 +725,13 @@ Entity SdfEntityCreator::CreateEntities(const sdf::Link *_link)
   {
     this->dataPtr->ecm->CreateComponent(
         linkEntity, components::WindMode(_link->EnableWind()));
+  }
+
+  if (!_link->EnableGravity())
+  {
+    // If disable gravity, create a GravityEnabled component to the entity
+    this->dataPtr->ecm->CreateComponent(
+        linkEntity, components::GravityEnabled(false));
   }
 
   // Visuals
@@ -834,8 +956,47 @@ Entity SdfEntityCreator::CreateEntities(const sdf::Visual *_visual)
   // \todo(louise) Populate with default material if undefined
   if (_visual->Material())
   {
+    sdf::Material visualMaterial = *_visual->Material();
+    if (!_visual->Material()->ScriptUri().empty())
+    {
+      gzwarn << "Gazebo does not support Ogre material scripts. See " <<
+      "https://gazebosim.org/api/sim/8/migrationsdf.html#:~:text=Materials " <<
+      "for details." << std::endl;
+      std::string scriptUri = visualMaterial.ScriptUri();
+      if (scriptUri != "file://media/materials/scripts/gazebo.material") {
+        gzwarn << "Custom material scripts are not supported."
+          << std::endl;
+      }
+    }
+    if (!_visual->Material()->ScriptName().empty())
+    {
+      std::string scriptName = visualMaterial.ScriptName();
+
+      if ((scriptName.find("Gazebo/") == 0u))
+      {
+        gzwarn << "Using an internal gazebo.material to parse "
+          << scriptName << std::endl;
+        std::optional<MaterialParser::MaterialValues> parsed =
+          this->dataPtr->materialParser.GetMaterialValues(scriptName);
+
+        if(parsed.has_value())
+        {
+          visualMaterial.SetAmbient
+            (parsed->ambient.value_or(visualMaterial.Ambient()));
+          visualMaterial.SetDiffuse
+            (parsed->diffuse.value_or(visualMaterial.Diffuse()));
+          visualMaterial.SetSpecular
+            (parsed->specular.value_or(visualMaterial.Specular()));
+        }
+        else
+        {
+          gzwarn << "Material " << scriptName <<
+            " not recognized or supported, using default." << std::endl;
+        }
+      }
+    }
     this->dataPtr->ecm->CreateComponent(visualEntity,
-        components::Material(*_visual->Material()));
+        components::Material(visualMaterial));
   }
 
   // store the plugin in a component

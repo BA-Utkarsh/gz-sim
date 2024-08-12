@@ -108,7 +108,6 @@
           <property type="bool" key="showTitleBar">false</property>
           <property type="bool" key="resizable">false</property>
           <property type="double" key="height">72</property>
-          <property type="double" key="width">121</property>
           <property type="double" key="z">1</property>
 
           <property type="string" key="state">floating</property>
@@ -1166,7 +1165,7 @@
                     <outer_angle>1.1</outer_angle>
                     <falloff>1</falloff>
                 </spot>
-                <direction>0 -1 0</direction>
+                <direction>0 0 -1</direction>
                 <cast_shadows>1</cast_shadows>
             </light>
         <sensor name="camera" type="camera">

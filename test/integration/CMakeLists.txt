@@ -44,10 +44,12 @@ set(tests
   level_manager.cc
   level_manager_runtime_performers.cc
   light.cc
+  lighter_than_air_dynamics.cc
   link.cc
   logical_camera_system.cc
   logical_audio_sensor_plugin.cc
   magnetometer_system.cc
+  material.cc
   model.cc
   model_photo_shoot_default_joints.cc
   model_photo_shoot_random_joints.cc
@@ -69,6 +71,7 @@ set(tests
   reset.cc
   reset_detachable_joint.cc
   save_world.cc
+  spacecraft.cc
   scene_broadcaster_system.cc
   sdf_frame_semantics.cc
   sdf_include.cc
@@ -101,6 +104,8 @@ set(tests_needing_display
   depth_camera.cc
   distortion_camera.cc
   gpu_lidar.cc
+  markers.cc
+  mesh_uri.cc
   optical_tactile_plugin.cc
   reset_sensors.cc
   rgbd_camera.cc
@@ -110,6 +115,7 @@ set(tests_needing_display
   shader_param_system.cc
   thermal_sensor_system.cc
   thermal_system.cc
+  triggered_camera.cc
   wide_angle_camera.cc
 )
 
@@ -148,6 +154,9 @@ gz_build_tests(TYPE INTEGRATION
     ${tests}
   LIB_DEPS
     ${EXTRA_TEST_LIB_DEPS}
+    ${PROJECT_LIBRARY_TARGET_NAME}-rendering
+  ENVIRONMENT
+    GZ_SIM_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
 )
 
 

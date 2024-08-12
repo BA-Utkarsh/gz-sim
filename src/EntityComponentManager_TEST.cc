@@ -2218,6 +2218,72 @@ TEST_P(EntityComponentManagerFixture, Descendants)
 
 //////////////////////////////////////////////////
 TEST_P(EntityComponentManagerFixture,
+       GZ_UTILS_TEST_DISABLED_ON_WIN32(UpdatePeriodicChangeCache))
+{
+  Entity e1 = manager.CreateEntity();
+  auto c1 = manager.CreateComponent<IntComponent>(e1, IntComponent(123));
+
+  std::unordered_map<ComponentTypeId,
+                        std::unordered_set<Entity>> changeTracker;
+
+  // No periodic changes keep cache empty.
+  manager.UpdatePeriodicChangeCache(changeTracker);
+  EXPECT_EQ(changeTracker.size(), 0u);
+
+  // Create a periodic change.
+  manager.SetChanged(e1, c1->TypeId(), ComponentState::PeriodicChange);
+
+  // 1 periodic change, should be reflected in cache.
+  manager.UpdatePeriodicChangeCache(changeTracker);
+  EXPECT_EQ(changeTracker.size(), 1u);
+  EXPECT_EQ(changeTracker[c1->TypeId()].count(e1), 1u);
+
+  manager.RunSetAllComponentsUnchanged();
+
+  // Has periodic change. Cache should be full.
+  manager.UpdatePeriodicChangeCache(changeTracker);
+  EXPECT_EQ(changeTracker.size(), 1u);
+  EXPECT_EQ(changeTracker[c1->TypeId()].count(e1), 1u);
+  EXPECT_EQ(changeTracker[c1->TypeId()].size(), 1u);
+
+  // Serialize state
+  msgs::SerializedStateMap state;
+  manager.PeriodicStateFromCache(state, changeTracker);
+  EXPECT_EQ(state.entities().size(), 1u);
+  EXPECT_EQ(
+    state.entities().find(e1)->second.components().size(), 1u);
+  EXPECT_NE(state.entities().find(e1)->second
+      .components().find(c1->TypeId()),
+    state.entities().find(e1)->second.components().end());
+
+  // Component removed cache should be updated.
+  manager.RemoveComponent<IntComponent>(e1);
+  manager.UpdatePeriodicChangeCache(changeTracker);
+  EXPECT_EQ(changeTracker.size(), 1u);
+  EXPECT_EQ(changeTracker[c1->TypeId()].size(), 0u);
+
+  manager.RunSetAllComponentsUnchanged();
+
+  // Add another component to the entity
+  auto c2 = manager.CreateComponent<IntComponent>(e1, IntComponent(123));
+  manager.UpdatePeriodicChangeCache(changeTracker);
+
+  // Cache does not track additions, only PeriodicChanges
+  EXPECT_EQ(changeTracker[c2->TypeId()].size(), 0u);
+
+  // Track change
+  manager.SetChanged(e1, c1->TypeId(), ComponentState::PeriodicChange);
+  manager.UpdatePeriodicChangeCache(changeTracker);
+  EXPECT_EQ(changeTracker[c2->TypeId()].size(), 1u);
+
+  // Entity removed cache should be updated.
+  manager.RequestRemoveEntity(e1);
+  manager.UpdatePeriodicChangeCache(changeTracker);
+  EXPECT_EQ(changeTracker[c2->TypeId()].size(), 0u);
+}
+
+//////////////////////////////////////////////////
+TEST_P(EntityComponentManagerFixture,
        GZ_UTILS_TEST_DISABLED_ON_WIN32(SetChanged))
 {
   // Create entities
@@ -3353,6 +3419,23 @@ TEST_P(EntityComponentManagerFixture,
   comp = manager.Component<IntComponent>(e1);
   ASSERT_NE(nullptr, comp);
   EXPECT_EQ(321, comp->Data());
+}
+
+//////////////////////////////////////////////////
+TEST_P(EntityComponentManagerFixture, EntityByName)
+{
+  // Create an entity, and give it a name
+  Entity entity = manager.CreateEntity();
+  manager.CreateComponent(entity, components::Name("entity_name_a"));
+
+  // Try to get an entity that doesn't exist
+  std::optional<Entity> entityByName = manager.EntityByName("a_bad_name");
+  EXPECT_FALSE(entityByName);
+
+  entityByName = manager.EntityByName("entity_name_a");
+  EXPECT_TRUE(entityByName);
+  CompareEntityComponents<components::Name>(manager, entity,
+    *entityByName, true);
 }
 
 // Run multiple times. We want to make sure that static globals don't cause

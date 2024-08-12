@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <gz/math/Matrix3.hh>
+#include <gz/math/Matrix6.hh>
 #include <gz/math/Pose3.hh>
 #include <gz/math/Quaternion.hh>
 #include <gz/math/Vector3.hh>
@@ -269,6 +270,14 @@ namespace gz
       public: std::optional<math::Matrix3d> WorldInertiaMatrix(
           const EntityComponentManager &_ecm) const;
 
+      /// \brief Get the fluid added mass matrix in the world frame.
+      /// \param[in] _ecm Entity-component manager.
+      /// \return Fluide added matrix in world frame, returns nullopt if link
+      /// does not have components components::Inertial and
+      /// components::WorldPose.
+      public: std::optional<math::Matrix6d> WorldFluidAddedMassMatrix(
+          const EntityComponentManager &_ecm) const;
+
       /// \brief Get the rotational and translational kinetic energy of the
       /// link with respect to the world frame.
       /// \param[in] _ecm Entity-component manager.
@@ -305,6 +314,19 @@ namespace gz
       public: void AddWorldWrench(EntityComponentManager &_ecm,
                                  const math::Vector3d &_force,
                                  const math::Vector3d &_torque) const;
+
+      /// \brief Add a wrench expressed in world coordinates and applied to
+      /// the link at an offset from the link's origin. This wrench
+      /// is applied for one simulation step.
+      /// \param[in] _ecm Mutable Entity-component manager.
+      /// \param[in] _force Force to be applied expressed in world coordinates
+      /// \param[in] _torque Torque to be applied expressed in world coordinates
+      /// \param[in] _offset The point of application of the force expressed
+      /// in the link frame
+      public: void AddWorldWrench(EntityComponentManager &_ecm,
+                                  const math::Vector3d &_force,
+                                  const math::Vector3d &_torque,
+                                  const math::Vector3d &_offset) const;
 
       /// \brief Pointer to private data.
       private: std::unique_ptr<LinkPrivate> dataPtr;
